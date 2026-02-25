@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>OpenAI Voice Translator</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <style>
+        body { font-family: sans-serif; background: #1c1c1e; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        .container { text-align: center; width: 90%; max-width: 400px; background: #2c2c2e; padding: 30px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
+        select { width: 100%; padding: 15px; border-radius: 12px; background: #3a3a3c; color: white; border: 1px solid #48484a; font-size: 16px; margin-bottom: 30px; }
+        #micBtn { width: 120px; height: 120px; border-radius: 50%; border: none; background: #ff3b30; color: white; font-size: 40px; cursor: pointer; transition: 0.3s; box-shadow: 0 0 20px rgba(255,59,48,0.4); }
+        #micBtn.recording { background: #ff453a; transform: scale(1.1); box-shadow: 0 0 40px rgba(255,59,48,0.8); animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
+        .status { margin-top: 20px; font-size: 14px; color: #8e8e93; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2 style="color: #0a84ff;">Переводчик</h2>
+        <p>Выберите пару языков:</p>
+        <select id="langPair">
+            <option value="Russian-Polish">Русский ↔ Польский</option>
+            <option value="Russian-German">Русский ↔ Немецкий</option>
+            <option value="Russian-Spanish">Русский ↔ Испанский</option>
+            <option value="Russian-English">Русский ↔ Английский</option>
+            <option value="Russian-Czech">Русский ↔ Чешский</option>
+        </select>
+        <button id="micBtn">🎤</button>
+        <div id="status" class="status">Нажмите и говорите</div>
+    </div>
+
+    <script>
+        const tg = window.Telegram.WebApp;
+        tg.expand();
+
+        let ws;
+        let mediaRecorder;
+        let audioChunks = [];
+        const micBtn = document.getElementById('micBtn');
+        const status = document.getElementById('status');
+
+        function connect() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}`);
+            
+            ws.onopen = () => {
+                status.innerText = "Подключено";
+                ws.send(JSON.stringify({ type: 'setup', pair: document.getElementById('langPair').value }));
+            };
+
+            ws.onmessage = async (event) => {
+                const audioBlob = new Blob([event.data], { type: 'audio/wav' });
+                const audioUrl = URL.createObjectURL(audioBlob);
+                const audio = new Audio(audioUrl);
+                status.innerText = "Перевод...";
+                await audio.play();
+                status.innerText = "Готово";
+            };
+
+            ws.onclose = () => {
+                status.innerText = "Ошибка подключения. Переподключаюсь...";
+                setTimeout(connect, 2000);
+            };
+        }
+
+        connect();
+
+        micBtn.onmousedown = micBtn.ontouchstart = async (e) => {
+            e.preventDefault();
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            audioChunks = [];
+
+            mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
+            mediaRecorder.onstop = () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                ws.send(audioBlob);
+                status.innerText = "Обработка...";
+            };
+
+            mediaRecorder.start();
+            micBtn.classList.add('recording');
+            status.innerText = "Слушаю...";
+        };
+
+        micBtn.onmouseup = micBtn.ontouchend = () => {
+            if (mediaRecorder && mediaRecorder.state === "recording") {
+                mediaRecorder.stop();
+                micBtn.classList.remove('recording');
+            }
+        };
+    </script>
+</body>
+</html>
