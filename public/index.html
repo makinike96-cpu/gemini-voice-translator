@@ -1,42 +1,11 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Voice Translator</title>
-    <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <!-- Библиотека для записи правильного WAV формата -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/recorderjs/0.1.0/recorder.js"></script>
-    <style>
-        body { font-family: sans-serif; background: #1c1c1e; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; overflow: hidden; }
-        .container { text-align: center; width: 90%; max-width: 400px; background: #2c2c2e; padding: 30px; border-radius: 24px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
-        select { width: 100%; padding: 15px; border-radius: 12px; background: #3a3a3c; color: white; border: 1px solid #48484a; font-size: 16px; margin-bottom: 30px; outline: none; }
-        #micBtn { width: 130px; height: 130px; border-radius: 50%; border: none; background: #0a84ff; color: white; font-size: 50px; cursor: pointer; transition: 0.3s; box-shadow: 0 0 20px rgba(10,132,255,0.3); -webkit-tap-highlight-color: transparent; }
-        #micBtn.recording { background: #ff3b30; transform: scale(1.1); box-shadow: 0 0 40px rgba(255,59,48,0.6); }
-        .status { margin-top: 25px; font-size: 16px; color: #8e8e93; min-height: 20px; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h2 style="margin-top: 0; color: #0a84ff;">Переводчик</h2>
-        <select id="langPair">
-            <option value="Russian-Polish">Русский ↔ Польский</option>
-            <option value="Russian-German">Русский ↔ Немецкий</option>
-            <option value="Russian-Spanish">Русский ↔ Испанский</option>
-            <option value="Russian-English">Русский ↔ Английский</option>
-            <option value="Russian-Czech">Русский ↔ Чешский</option>
-        </select>
-        <button id="micBtn">🎤</button>
-        <div id="status" class="status">Подключение...</div>
-    </div>
-
-    <script>
+<script>
         const tg = window.Telegram.WebApp;
         tg.expand();
 
         let ws;
         let audioContext;
         let recorder;
+        let isRecording = false;
         const micBtn = document.getElementById('micBtn');
         const status = document.getElementById('status');
 
@@ -52,9 +21,9 @@
             ws.onmessage = async (event) => {
                 const audioBlob = new Blob([event.data], { type: 'audio/wav' });
                 const audio = new Audio(URL.createObjectURL(audioBlob));
-                status.innerText = "Перевод...";
+                status.innerText = "Играю перевод...";
                 await audio.play();
-                status.innerText = "Готово";
+                status.innerText = "Готов";
             };
 
             ws.onclose = () => {
@@ -65,34 +34,54 @@
 
         connect();
 
-        async function initRecorder() {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-            const input = audioContext.createMediaStreamSource(stream);
-            recorder = new Recorder(input, { numChannels: 1 });
+        async function startRecording() {
+            try {
+                if (!audioContext) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                }
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
+
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                const input = audioContext.createMediaStreamSource(stream);
+                recorder = new Recorder(input, { numChannels: 1 });
+                
+                recorder.record();
+                isRecording = true;
+                micBtn.classList.add('recording');
+                status.innerText = "Слушаю...";
+            } catch (err) {
+                status.innerText = "Ошибка микрофона: " + err.message;
+            }
         }
 
-        micBtn.onmousedown = micBtn.ontouchstart = async (e) => {
-            e.preventDefault();
-            if (!recorder) await initRecorder();
-            recorder.clear();
-            recorder.record();
-            micBtn.classList.add('recording');
-            status.innerText = "Слушаю...";
-        };
-
-        micBtn.onmouseup = micBtn.ontouchend = (e) => {
-            e.preventDefault();
-            if (recorder) {
+        function stopRecording() {
+            if (recorder && isRecording) {
                 recorder.stop();
+                isRecording = false;
                 micBtn.classList.remove('recording');
                 status.innerText = "Обработка...";
                 
                 recorder.exportWAV((blob) => {
-                    ws.send(blob);
+                    console.log("Размер файла:", blob.size);
+                    if (blob.size > 1000) { // Отправляем только если файл больше 1Кб
+                        ws.send(blob);
+                    } else {
+                        status.innerText = "Слишком коротко, повторите";
+                    }
                 });
             }
+        }
+
+        // Обработка нажатий
+        micBtn.onmousedown = micBtn.ontouchstart = (e) => {
+            e.preventDefault();
+            startRecording();
+        };
+
+        micBtn.onmouseup = micBtn.ontouchend = (e) => {
+            e.preventDefault();
+            stopRecording();
         };
     </script>
-</body>
-</html>
