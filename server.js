@@ -18,47 +18,32 @@ app.get('/', (req, res) => {
 });
 
 wss.on('connection', (ws) => {
-    console.log('Клиент подключился (OpenAI Audio)');
-    let langPair = "Russian-English"; // По умолчанию
+    console.log('Новое подключение к Koyeb (OpenAI)');
+    let langPair = "Russian-English";
 
     ws.on('message', async (message) => {
         try {
             const messageString = message.toString();
             if (messageString.startsWith('{')) {
                 const data = JSON.parse(messageString);
-                if (data.type === 'setup') {
-                    langPair = data.pair;
-                    console.log(`Настройка языков: ${langPair}`);
-                }
+                if (data.type === 'setup') langPair = data.pair;
                 return;
             }
 
-            // Отправляем аудио в OpenAI
             const [langA, langB] = langPair.split('-');
             
             const response = await openai.chat.completions.create({
                 model: "gpt-4o-audio-preview-2025-06-03",
                 modalities: ["audio", "text"],
-                audio: {
-                    voice: "alloy", // Голоса: alloy, echo, shimmer, ash, ballad, coral, sage, verse
-                    format: "wav"
-                },
+                audio: { voice: "alloy", format: "wav" },
                 messages: [
                     {
                         role: "system",
-                        content: `Ты — мгновенный голосовой переводчик. Слушай аудио. Если слышишь ${langA}, переводи на ${langB}. Если слышишь ${langB}, переводи на ${langA}. Выдавай ТОЛЬКО аудио перевода. Никаких лишних слов.`
+                        content: `Ты — мгновенный голосовой переводчик. Слушай аудио. Если слышишь ${langA}, переводи на ${langB}. Если слышишь ${langB}, переводи на ${langA}. Выдавай ТОЛЬКО аудио перевода.`
                     },
                     {
                         role: "user",
-                        content: [
-                            {
-                                type: "input_audio",
-                                input_audio: {
-                                    data: message.toString('base64'),
-                                    format: "wav"
-                                }
-                            }
-                        ]
+                        content: [{ type: "input_audio", input_audio: { data: message.toString('base64'), format: "wav" } }]
                     }
                 ]
             });
@@ -67,16 +52,14 @@ wss.on('connection', (ws) => {
             if (audioData && ws.readyState === WebSocket.OPEN) {
                 ws.send(Buffer.from(audioData, 'base64'));
             }
-
         } catch (error) {
-            console.error('Ошибка OpenAI:', error.message);
+            console.error('Ошибка:', error.message);
         }
     });
-
-    ws.on('close', () => console.log('Отключено'));
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`Сервер OpenAI запущен: http://localhost:${PORT}`);
+// Koyeb использует порт 8000 по умолчанию или PORT из окружения
+const PORT = process.env.PORT || 8000;
+server.listen(PORT, "0.0.0.0", () => {
+    console.log(`Сервер запущен на порту ${PORT}`);
 });
