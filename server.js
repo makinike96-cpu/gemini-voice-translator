@@ -1,9 +1,15 @@
+// server.js
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const path = require('path');
 const WebSocket = require('ws');
 const OpenAI = require('openai');
+
+if (!process.env.OPENAI_API_KEY) {
+  console.error("ERROR: OPENAI_API_KEY не задан в окружении.");
+  process.exit(1);
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -13,63 +19,111 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Простая главная страница
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 wss.on('connection', (ws) => {
-    console.log('Клиент подключен');
-    let langPair = "Russian-English";
+  console.log('Клиент подключен');
+  let langPair = 'Russian-English'; // значение по умолчанию
 
-    ws.on('message', async (message) => {
+  ws.on('message', async (message) => {
+    try {
+      // Если пришел JSON (настройка)
+      const asString = message.toString();
+      if (asString.startsWith('{')) {
         try {
-            // Если пришел JSON (настройка)
-            if (message.toString().startsWith('{')) {
-                const data = JSON.parse(message.toString());
-                if (data.type === 'setup') langPair = data.pair;
-                return;
-            }
-
-            // Если пришло аудио (Buffer)
-            console.log(`Получено аудио (${message.length} байт). Отправляю в OpenAI...`);
-            const [langA, langB] = langPair.split('-');
-
-            const response = await openai.chat.completions.create({
-                model: "gpt-4o-audio-preview-2025-06-03",
-                modalities: ["audio", "text"],
-                audio: { voice: "alloy", format: "wav" },
-                messages: [
-                    {
-                        role: "system",
-                        content: `Ты — мгновенный голосовой переводчик. Если слышишь ${langA}, переводи на ${langB}. Если слышишь ${langB}, переводи на ${langA}. Выдавай ТОЛЬКО аудио перевода.`
-                    },
-                    {
-                        role: "user",
-                        content: [
-                            {
-                                type: "input_audio",
-                                input_audio: {
-                                    data: message.toString('base64'),
-                                    format: "wav"
-                                }
-                            }
-                        ]
-                    }
-                ]
-            });
-
-            const audioData = response.choices[0].message.audio.data;
-            if (audioData && ws.readyState === WebSocket.OPEN) {
-                console.log("Ответ от OpenAI получен, отправляю клиенту.");
-                ws.send(Buffer.from(audioData, 'base64'));
-            }
-        } catch (error) {
-            console.error('ОШИБКА:', error.message);
+          const obj = JSON.parse(asString);
+          if (obj.type === 'setup' && obj.pair) {
+            langPair = obj.pair;
+            console.log('Настройка языковой пары:', langPair);
+          }
+        } catch (e) {
+          console.warn('Не удалось распарсить JSON из сообщения:', e.message);
         }
-    });
+        return;
+      }
+
+      // Ожидаем бинарное сообщение с аудио
+      const buf = Buffer.isBuffer(message) ? message : Buffer.from(message);
+      console.log(`Получено аудио (${buf.length} байт). Подготовка к отправке в OpenAI...`);
+
+      // Защита: не отправляем совсем пустые файлы
+      if (buf.length < 1000) {
+        console.warn('Аудио слишком маленькое, пропускаем (возможно пустая запись).');
+        // Отправим клиенту простой ответ для UX
+        try { ws.send(JSON.stringify({ error: 'audio_too_short' })); } catch (e) {}
+        return;
+      }
+
+      const [langA, langB] = langPair.split('-').map(s => s.trim());
+
+      // Строгий system prompt: только перевод, НИКАКИХ комментариев
+      const systemPrompt = `
+Ты — мгновенный голосовой переводчик между двумя языками: ${langA} и ${langB}.
+Твоя задача — ПЕРЕВОДИТЬ ТОЛЬКО аудио, без каких-либо комментариев, советов, вопросов или объяснений.
+Если слышишь ${langA}, переводи на ${langB}.
+Если слышишь ${langB}, переводи на ${langA}.
+Отвечай исключительно аудио, без текста.
+Не добавляй никаких дополнительных слов или фраз.
+Если не понимаешь — просто молчи.
+`.trim();
+
+      // Вызов OpenAI: отправляем входное аудио как base64 (формат wav)
+      const base64Audio = buf.toString('base64');
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-audio-preview-2025-06-03",
+        modalities: ["audio", "text"],
+        audio: { voice: "alloy", format: "wav" },
+        messages: [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_audio",
+                input_audio: {
+                  data: base64Audio,
+                  format: "wav"
+                }
+              }
+            ]
+          }
+        ]
+      });
+
+      // Проверяем ответ и отправляем клиенту бинарно
+      const choice = response?.choices?.[0];
+      const audioBase64 = choice?.message?.audio?.data;
+      if (!audioBase64) {
+        console.error('OpenAI вернул ответ без аудио:', JSON.stringify(response?.choices || response));
+        try { ws.send(JSON.stringify({ error: 'no_audio_from_openai' })); } catch (e) {}
+        return;
+      }
+
+      const outBuf = Buffer.from(audioBase64, 'base64');
+      console.log(`Ответ от OpenAI получен (${outBuf.length} байт). Отправляю клиенту...`);
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(outBuf);
+      }
+    } catch (err) {
+      console.error('Ошибка при обработке сообщения:', err.message || err);
+      try { ws.send(JSON.stringify({ error: err.message || 'server_error' })); } catch (e) {}
+    }
+  });
+
+  ws.on('close', () => {
+    console.log('Клиент отключился');
+  });
+
+  ws.on('error', (err) => {
+    console.warn('WS error:', err && err.message ? err.message : err);
+  });
 });
 
 const PORT = process.env.PORT || 8000;
-server.listen(PORT, "0.0.0.0", () => {
-    console.log(`Сервер запущен на порту ${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Сервер запущен на порту ${PORT}`);
 });
