@@ -1,70 +1,208 @@
-<script>
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Voice Translator</title>
+
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <!-- Recorder.js (простая библиотека для экспортирования WAV) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/recorderjs/0.1.0/recorder.js"></script>
+
+  <style>
+    body { margin:0; font-family: Arial, Helvetica, sans-serif; background:#111; color:#fff; display:flex; align-items:center; justify-content:center; height:100vh; }
+    .card { width:92%; max-width:420px; background:#1f1f1f; padding:20px; border-radius:12px; box-shadow:0 6px 24px rgba(0,0,0,0.6); text-align:center; }
+    h1 { margin:6px 0 14px 0; font-size:20px; color:#0af; }
+    select, button { width:100%; padding:12px; margin:8px 0; border-radius:10px; border:none; font-size:16px; }
+    select { background:#2c2c2c; color:#fff; }
+    #activateBtn { background:#28a745; color:#fff; }
+    #micBtn { background:#0a84ff; color:#fff; font-size:28px; height:110px; border-radius:999px; width:110px; margin:12px auto; display:none; }
+    #micBtn.recording { background:#ff3b30; transform:scale(1.06); }
+    .status { color:#bdbdbd; margin-top:10px; min-height:20px; }
+    .row { display:flex; gap:8px; }
+    .half { flex:1; }
+    .small { font-size:13px; color:#9aa; margin-top:6px; text-align:left; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Голосовой переводчик</h1>
+
+    <div class="row">
+      <div class="half">
+        <label class="small">Язык A</label>
+        <select id="langA">
+          <option value="Russian">Русский</option>
+          <option value="German">Немецкий</option>
+          <option value="Polish">Польский</option>
+          <option value="Czech">Чешский</option>
+          <option value="Spanish">Испанский</option>
+          <option value="English">Английский</option>
+        </select>
+      </div>
+      <div class="half">
+        <label class="small">Язык B</label>
+        <select id="langB">
+          <option value="Polish">Польский</option>
+          <option value="German">Немецкий</option>
+          <option value="Czech">Чешский</option>
+          <option value="Spanish">Испанский</option>
+          <option value="English">Английский</option>
+          <option value="Russian">Русский</option>
+        </select>
+      </div>
+    </div>
+
+    <button id="activateBtn">Включить микрофон (один раз)</button>
+
+    <button id="micBtn">🎤</button>
+
+    <div id="status" class="status">Нажмите "Включить микрофон"</div>
+  </div>
+
+  <script>
     const tg = window.Telegram.WebApp;
-    tg.expand();
+    try { tg.expand(); } catch (e) {}
+
+    const activateBtn = document.getElementById('activateBtn');
+    const micBtn = document.getElementById('micBtn');
+    const status = document.getElementById('status');
+    const langA = document.getElementById('langA');
+    const langB = document.getElementById('langB');
 
     let ws;
     let audioContext;
     let recorder;
-    const micBtn = document.getElementById('micBtn');
-    const activateBtn = document.getElementById('activateBtn');
-    const status = document.getElementById('status');
-    const langSelect = document.getElementById('langPair');
+    let mediaStream;
 
-    function connect() {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = new WebSocket(`${protocol}//${window.location.host}`);
-        ws.onopen = () => { status.innerText = "Готов к работе"; };
-        ws.onmessage = async (event) => {
-            const audioBlob = new Blob([event.data], { type: 'audio/wav' });
-            const audio = new Audio(URL.createObjectURL(audioBlob));
-            status.innerText = "Играю перевод...";
-            await audio.play();
-            status.innerText = "Готов";
-        };
+    function connectWS() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${window.location.host}`);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        console.log('WS open');
+        status.innerText = 'Готов к работе';
+      };
+
+      ws.onmessage = async (ev) => {
+        // Если пришла строка (JSON) — показать статус/ошибку
+        if (typeof ev.data === 'string') {
+          try {
+            const obj = JSON.parse(ev.data);
+            if (obj && obj.error) {
+              status.innerText = 'Ошибка: ' + obj.error;
+              console.warn('Server error:', obj);
+              return;
+            }
+          } catch (e) {
+            console.log('Text message from server:', ev.data);
+            return;
+          }
+        }
+
+        // Если пришёл бинарный ответ — считаем это WAV и воспроизводим
+        try {
+          const blob = new Blob([ev.data], { type: 'audio/wav' });
+          const audioUrl = URL.createObjectURL(blob);
+          const audio = new Audio(audioUrl);
+          status.innerText = 'Воспроизвожу перевод...';
+          await audio.play();
+          status.innerText = 'Готов';
+        } catch (err) {
+          console.error('Ошибка воспроизведения:', err);
+          status.innerText = 'Ошибка воспроизведения';
+        }
+      };
+
+      ws.onclose = () => {
+        console.log('WS closed, повторное подключение через 2с');
+        status.innerText = 'Соединение потеряно. Переподключение...';
+        setTimeout(connectWS, 2000);
+      };
+
+      ws.onerror = (err) => {
+        console.error('WS error', err);
+      };
     }
-    connect();
 
+    connectWS();
+
+    // Активировать микрофон один раз
     activateBtn.onclick = async () => {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      try {
+        status.innerText = 'Запрос доступа к микрофону...';
+        mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-        const input = audioContext.createMediaStreamSource(stream);
+        const input = audioContext.createMediaStreamSource(mediaStream);
         recorder = new Recorder(input, { numChannels: 1 });
         activateBtn.style.display = 'none';
         micBtn.style.display = 'inline-block';
-        status.innerText = "Зажмите микрофон";
+        status.innerText = 'Микрофон включён. Зажмите 🎤, говорите, отпустите.';
+      } catch (err) {
+        console.error('Ошибка доступа к микрофону:', err);
+        status.innerText = 'Ошибка доступа: ' + (err.message || err);
+      }
     };
 
-    function start() {
-        if (recorder) {
-            if (audioContext.state === 'suspended') audioContext.resume();
-            recorder.clear();
-            recorder.record();
-            micBtn.classList.add('recording');
-            status.innerText = "Слушаю...";
-        }
+    // Начать запись
+    function startRecord() {
+      if (!recorder) {
+        status.innerText = 'Сначала нажмите "Включить микрофон"';
+        return;
+      }
+      if (audioContext && audioContext.state === 'suspended') audioContext.resume();
+      recorder.clear();
+      recorder.record();
+      micBtn.classList.add('recording');
+      status.innerText = 'Запись...';
     }
 
-    function stop() {
-        if (recorder) {
-            recorder.stop();
-            micBtn.classList.remove('recording');
-            status.innerText = "Обработка...";
-            recorder.exportWAV((blob) => {
-                // ОТПРАВЛЯЕМ ЯЗЫК В ЗАГОЛОВКЕ ПЕРЕД АУДИО
-                const reader = new FileReader();
-                reader.onload = () => {
-                    const base64Audio = reader.result.split(',')[1];
-                    ws.send(JSON.stringify({
-                        type: 'audio_data',
-                        pair: langSelect.value,
-                        audio: base64Audio
-                    }));
-                };
-                reader.readAsDataURL(blob);
-            });
+    // Остановить и отправить
+    function stopAndSend() {
+      if (!recorder) return;
+      recorder.stop();
+      micBtn.classList.remove('recording');
+      status.innerText = 'Отправляю на перевод...';
+
+      recorder.exportWAV((blob) => {
+        // Обработка: если маленький файл — предупреждаем
+        if (blob.size < 1000) {
+          status.innerText = 'Слишком короткая запись. Попробуйте говорить дольше.';
+          return;
         }
+
+        const reader = new FileReader();
+        reader.onload = function() {
+          const dataUrl = reader.result; // "data:audio/wav;base64,...."
+          const base64 = dataUrl.split(',')[1];
+          const pair = `${langA.value}-${langB.value}`;
+          const payload = {
+            type: 'audio_data',
+            pair: pair,
+            audio: base64
+          };
+          try {
+            ws.send(JSON.stringify(payload));
+            status.innerText = 'Отправлено, ожидаю перевод...';
+            console.log('Отправлено payload, pair=', pair, 'base64 len=', base64.length);
+          } catch (err) {
+            console.error('Ошибка при отправке WS:', err);
+            status.innerText = 'Ошибка отправки: ' + (err.message || err);
+          }
+        };
+        reader.readAsDataURL(blob);
+      });
     }
 
-    micBtn.onmousedown = micBtn.ontouchstart = (e) => { e.preventDefault(); start(); };
-    micBtn.onmouseup = micBtn.ontouchend = (e) => { e.preventDefault(); stop(); };
-</script>
+    // Поддержка кликов и тачей
+    micBtn.onmousedown = micBtn.ontouchstart = (e) => { e.preventDefault(); startRecord(); };
+    micBtn.onmouseup = micBtn.ontouchend = (e) => { e.preventDefault(); stopAndSend(); };
+
+    // Отправлять выбранную пару при смене (опционально — показывает в status)
+    langA.onchange = langB.onchange = () => {
+      status.innerText = `Пара: ${langA.options[langA.selectedIndex].text} ↔ ${langB.options[langB.selectedIndex].text}`;
+    };
+  </script>
+</body>
+</html>
