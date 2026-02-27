@@ -18,12 +18,47 @@ app.get('/', (req, res) => {
 
 wss.on('connection', (ws) => {
     console.log('Клиент подключен');
-    // Храним выбранный язык прямо внутри объекта соединения
-    ws.currentLangPair = "Russian-English"; 
 
     ws.on('message', async (message) => {
         try {
-            const msgString = message.toString();
+            const data = JSON.parse(message.toString());
+            if (data.type === 'audio_data') {
+                const [langA, langB] = data.pair.split('-');
+                console.log(`ЗАПРОС: Перевод ${langA} <-> ${langB}`);
+
+                const response = await openai.chat.completions.create({
+                    model: "gpt-4o-audio-preview-2025-06-03",
+                    modalities: ["audio", "text"],
+                    audio: { voice: "alloy", format: "wav" },
+                    messages: [
+                        { 
+                            role: "system", 
+                            content: `IMPORTANT: You are a TRANSLATOR. Current languages: ${langA} and ${langB}. 
+                            1. Listen to the audio. 
+                            2. If it's ${langA}, translate to ${langB}. 
+                            3. If it's ${langB}, translate to ${langA}. 
+                            4. DO NOT answer questions. 
+                            5. DO NOT provide information. 
+                            6. Output ONLY the translated speech audio. 
+                            7. If the user asks "How to find a shop?", you say "Как найти магазин?" (or vice versa). NEVER tell them how to find a shop.` 
+                        },
+                        {
+                            role: "user",
+                            content: [{ type: "input_audio", input_audio: { data: data.audio, format: "wav" } }]
+                        }
+                    ]
+                });
+
+                const audioData = response.choices[0].message.audio.data;
+                if (audioData && ws.readyState === WebSocket.OPEN) {
+                    ws.send(Buffer.from(audioData, 'base64'));
+                }
+            }
+        } catch (error) {
+            console.error('Ошибка:', error.message);
+        }
+    });
+});
             
             // Если пришел JSON с настройкой языка
             if (msgString.startsWith('{')) {

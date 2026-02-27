@@ -1,4 +1,3 @@
-<!-- Замени весь блок <script> в index.html на этот -->
 <script>
     const tg = window.Telegram.WebApp;
     tg.expand();
@@ -14,9 +13,7 @@
     function connect() {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         ws = new WebSocket(`${protocol}//${window.location.host}`);
-        ws.onopen = () => {
-            sendLang(); // Отправляем язык при подключении
-        };
+        ws.onopen = () => { status.innerText = "Готов к работе"; };
         ws.onmessage = async (event) => {
             const audioBlob = new Blob([event.data], { type: 'audio/wav' });
             const audio = new Audio(URL.createObjectURL(audioBlob));
@@ -25,32 +22,16 @@
             status.innerText = "Готов";
         };
     }
-
-    // Функция отправки выбранного языка
-    function sendLang() {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: 'setup', pair: langSelect.value }));
-            status.innerText = "Язык: " + langSelect.options[langSelect.selectedIndex].text;
-        }
-    }
-
-    // Отправлять язык сразу при смене в списке
-    langSelect.onchange = sendLang;
-
     connect();
 
     activateBtn.onclick = async () => {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-            const input = audioContext.createMediaStreamSource(stream);
-            recorder = new Recorder(input, { numChannels: 1 });
-            activateBtn.style.display = 'none';
-            micBtn.style.display = 'inline-block';
-            status.innerText = "Готов! Зажмите микрофон";
-        } catch (err) {
-            status.innerText = "Ошибка: " + err.message;
-        }
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        const input = audioContext.createMediaStreamSource(stream);
+        recorder = new Recorder(input, { numChannels: 1 });
+        activateBtn.style.display = 'none';
+        micBtn.style.display = 'inline-block';
+        status.innerText = "Зажмите микрофон";
     };
 
     function start() {
@@ -69,7 +50,17 @@
             micBtn.classList.remove('recording');
             status.innerText = "Обработка...";
             recorder.exportWAV((blob) => {
-                ws.send(blob);
+                // ОТПРАВЛЯЕМ ЯЗЫК В ЗАГОЛОВКЕ ПЕРЕД АУДИО
+                const reader = new FileReader();
+                reader.onload = () => {
+                    const base64Audio = reader.result.split(',')[1];
+                    ws.send(JSON.stringify({
+                        type: 'audio_data',
+                        pair: langSelect.value,
+                        audio: base64Audio
+                    }));
+                };
+                reader.readAsDataURL(blob);
             });
         }
     }
