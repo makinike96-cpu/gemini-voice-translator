@@ -1,0 +1,79 @@
+<!-- Замени весь блок <script> в index.html на этот -->
+<script>
+    const tg = window.Telegram.WebApp;
+    tg.expand();
+
+    let ws;
+    let audioContext;
+    let recorder;
+    const micBtn = document.getElementById('micBtn');
+    const activateBtn = document.getElementById('activateBtn');
+    const status = document.getElementById('status');
+    const langSelect = document.getElementById('langPair');
+
+    function connect() {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${protocol}//${window.location.host}`);
+        ws.onopen = () => {
+            sendLang(); // Отправляем язык при подключении
+        };
+        ws.onmessage = async (event) => {
+            const audioBlob = new Blob([event.data], { type: 'audio/wav' });
+            const audio = new Audio(URL.createObjectURL(audioBlob));
+            status.innerText = "Играю перевод...";
+            await audio.play();
+            status.innerText = "Готов";
+        };
+    }
+
+    // Функция отправки выбранного языка
+    function sendLang() {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'setup', pair: langSelect.value }));
+            status.innerText = "Язык: " + langSelect.options[langSelect.selectedIndex].text;
+        }
+    }
+
+    // Отправлять язык сразу при смене в списке
+    langSelect.onchange = sendLang;
+
+    connect();
+
+    activateBtn.onclick = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+            const input = audioContext.createMediaStreamSource(stream);
+            recorder = new Recorder(input, { numChannels: 1 });
+            activateBtn.style.display = 'none';
+            micBtn.style.display = 'inline-block';
+            status.innerText = "Готов! Зажмите микрофон";
+        } catch (err) {
+            status.innerText = "Ошибка: " + err.message;
+        }
+    };
+
+    function start() {
+        if (recorder) {
+            if (audioContext.state === 'suspended') audioContext.resume();
+            recorder.clear();
+            recorder.record();
+            micBtn.classList.add('recording');
+            status.innerText = "Слушаю...";
+        }
+    }
+
+    function stop() {
+        if (recorder) {
+            recorder.stop();
+            micBtn.classList.remove('recording');
+            status.innerText = "Обработка...";
+            recorder.exportWAV((blob) => {
+                ws.send(blob);
+            });
+        }
+    }
+
+    micBtn.onmousedown = micBtn.ontouchstart = (e) => { e.preventDefault(); start(); };
+    micBtn.onmouseup = micBtn.ontouchend = (e) => { e.preventDefault(); stop(); };
+</script>
